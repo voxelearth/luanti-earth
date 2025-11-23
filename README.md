@@ -1,80 +1,233 @@
-# Voxel Earth Luanti - Node.js Pipeline
+# Voxel Earth (Luanti)
 
-## Complete Workflow
+Google Earth 3D Tiles → voxels → Luanti/Minetest.
 
-### 1. Download and Rotate Tiles
-```bash
-# Download tiles for a location (e.g., San Francisco)
-node download_and_rotate.js \
-  --key $GOOGLE_MAPS_KEY \
-  --lat 37.7749 --lng -122.4194 \
-  --radius 800 \
-  --out ./tiles \
-  --parallel 16 \
-  --debug-download
-```
+Type `/visit Paris` in-game and it will:
 
-This will create:
-- `tiles/*.glb` - Rotated and centered GLB files
-- `tiles/*_downloaded.glb` - Original GLB files (if `--debug-download` is used)
+- Geocode the location with the Google Maps API
+- Download Google Earth 3D tiles around that point
+- Voxelize the meshes with a Node.js pipeline
+- Place the blocks in your Luanti world
+- Teleport you above the imported area
 
-### 2. Voxelize Tiles
-```bash
-# Voxelizethe downloaded tiles
-node voxelize_tiles.js ./tiles ./voxels 200
-```
+This is a beta port of my Java/Bukkit code, wired up to Luanti with a Node shim.
 
-Arguments:
-- `./tiles` - Input directory with GLB files
-- `./voxels` - Output directory for voxel JSON files
-- `200` - Resolution (higher = more detail, but slower)
+---
 
-This will create:
-- `voxels/*_voxels.json` - Voxel data with positions and colors
+## Install
 
-### 3. Visualize (Optional)
-Open `visualizer.html` in a browser and paste the content of a voxel JSON file to preview it in 3D before loading into Luanti.
+1. **Drop the mod into Luanti**
 
-### 4. Load into Luanti
-1. Copy the `luanti_earth` mod folder to your Minetest mods directory
-2. Enable the mod in your world
-3. Configure `minetest.conf`:
+   Copy the `luanti_earth` folder into your Luanti mods directory, e.g.:
+
+   ```text
+   luanti-5.14.0-win64/
+     mods/
+       luanti_earth/
+         init.lua
+         voxel_importer.lua
+         tile_downloader.js
+         voxelize_tiles.js
+         voxelizer.worker.js
+         rotateUtils.cjs
+         colors.lua
+         mod.conf
+         package.json
+         ...
+
+2. **Install Node dependencies**
+
+   From inside the `luanti_earth` folder:
+
+   ```bash
+   cd path/to/luanti_earth
+   npm install
+   ```
+
+   This pulls in things like `three`, `axios`, `p-queue`, `yargs`, `jpeg-js`, etc.
+
+3. **Enable the mod**
+
+   * In the Luanti GUI: World → Configure → Mods → enable `luanti_earth`, **or**
+   * Add to `world.mt`:
+
+     ```ini
+     load_mod_luanti_earth = true
+     ```
+
+4. **Give it HTTP + “insecure” permissions**
+
+   The mod needs:
+
+   * HTTP to talk to Google
+   * Insecure env to run Node.js
+
+   In `minetest.conf` / `luanti.conf`:
+
    ```ini
    secure.http_mods = luanti_earth
-   ```
-4. In-game, use:
-   ```
-   /earth_load_voxels <absolute_path _to_voxel_json>
+   secure.trusted_mods = luanti_earth
    ```
 
-## File Structure
-```
-luanti-earth/
-├── download_and_rotate.js  # Node.js - Download & rotate tiles
-├── voxelize_tiles.js        # Node.js - Voxelize GLBs
-├── voxelize-model.js        # Node.js - Voxelization library
-├── voxelizer.worker.js      # Node.js - Worker for voxelization
-├── rotateUtils.cjs          # Node.js - ECEF to ENU rotation
-├── visualizer.html          # Browser - Voxel visualizer
-├── init.lua                 # Luanti - Mod entry point
-├── voxel_importer.lua       # Luanti - Voxel data loader
-├── mod.conf                 # Luanti - Mod configuration
-└── package.json             # Node.js dependencies
+   Or do the same via Advanced Settings → `secure.http_mods` / `secure.trusted_mods`.
+
+   Restart Luanti after changing this.
+
+---
+
+## Commands
+
+All commands are server-only (`privs = {server = true}` except `/visit` which also needs `teleport`). 
+
+Do `/grantme all` on the server for easy access.
+
+### `/earth_apikey <key>`
+
+Stores your Google API key in the world’s mod storage.
+
+```text
+/earth_apikey AIza...whatever
 ```
 
-## Dependencies
-```bash
-npm install
+The key must have:
+
+* Geocoding API enabled
+* Maps 3D Tiles / Google Earth 3D tiles access enabled
+
+I usually hard-code a key in plugins, but there’s no nice way to obfuscate it here, so you bring your own. If you’re stuck on that, ping me.
+
+---
+
+### `/visit <location>`
+
+Main entry point.
+
+Examples:
+
+```text
+/visit Paris
+/visit "New York, NY"
+/visit 40.7484,-73.9857
 ```
 
-Required packages:
-- `three` (for GLB loading and voxelization)
-- `axios` (for HTTP requests)
-- `p-queue` (for parallel processing)
-- `yargs` (for CLI arguments)
-- `draco3d` (for Draco decoding)
+What it does:
 
-## Notes
-- The voxelizer samples texture colors from the GLB files
-- Colors are mapped to Luanti blocks based on luminance and hue
-- You can customize the `rgb_to_block()` function in `voxel_importer.lua` to use different blocks
+1. Geocodes the text → lat/lng
+2. Runs `tile_downloader.js` to grab and rotate 3D tiles
+3. Runs `voxelize_tiles.js` to voxelize the GLBs → JSON
+4. Uses `voxel_importer.lua` + `VoxelManip` to place the voxels at `(0, 50, 0)`
+5. Teleports you up above the imported area
+
+Tiles + voxel JSON are cached per-world in:
+
+```text
+worlds/<yourworld>/luanti_earth_cache/<location>/glb/
+worlds/<yourworld>/luanti_earth_cache/<location>/json/
+```
+
+On first run, expect:
+
+* Your terminal/console to print Node logs
+* A bit of freezing while it downloads + voxelizes + places blocks
+
+---
+
+### `/earth_use_pure_colors <true|false>`
+
+Toggles how colors map to blocks.
+
+```text
+/earth_use_pure_colors true
+/earth_use_pure_colors false
+```
+
+* `true` (default):
+  Uses custom `luanti_earth:color_<id>` nodes (256 pure color blocks) so the result is closer to the actual imagery.
+* `false`:
+  Maps voxel colors to “natural” blocks (stone, dirt, leaves, etc.) using a color palette.
+
+This only affects *future* imports; it doesn’t retroactively remap existing areas.
+
+---
+
+### `/earth_load_voxels <absolute_path>`
+
+Load a single voxel JSON file at your current position:
+
+```text
+/earth_load_voxels C:\Users\you\voxels\paris_tile_01_voxels.json
+```
+
+* Reads the JSON on the server
+* Uses the same VoxelManip path as `/visit`
+* Places blocks relative to your position
+
+Useful when you’ve voxelized things manually via the CLI.
+
+---
+
+### `/earth_export_viz <input_json> <output_json>`
+
+Dumb exporter for a simpler visualization format:
+
+```text
+/earth_export_viz C:\path\to\full_voxels.json C:\path\to\viz.json
+```
+
+Writes a stripped-down JSON that’s easier to feed into a web visualizer. Mostly for debugging.
+
+---
+
+## How it works
+
+* `init.lua`
+
+  * Registers `/earth_apikey`, `/visit`, `/earth_use_pure_colors`, `/earth_load_voxels`, `/earth_export_viz`
+  * Uses `request_http_api()` at init (as required by Luanti)
+  * Uses `request_insecure_environment()` to get `os_execute` so it can run Node
+
+* `tile_downloader.js`
+
+  * Talks to Google’s 3D Tiles API
+  * Walks `root.json`, does bounding-volume culling
+  * Downloads GLBs and rotates everything into a shared origin (`rotateUtils.cjs`)
+
+* `voxelize_tiles.js` + `voxelizer.worker.js`
+
+  * Load GLBs with `three` / `GLTFLoader`
+  * Decode textures
+  * Voxelize into a grid
+  * Write `*_voxels.json` with:
+
+    * grid coords `x,y,z`
+    * world coords `wx,wy,wz`
+    * per-voxel `r,g,b,a`
+
+* `voxel_importer.lua`
+
+  * Reads the voxel JSON
+  * Uses world coords (if present) + an offset
+  * Uses `VoxelManip` to set thousands of nodes in one go instead of calling `set_node` in a loop
+  * Converts `r,g,b` → block name:
+
+    * If pure mode: `luanti_earth:color_<id>`
+    * Else: nearest match from the block palette
+
+---
+
+## Current state / caveats
+
+* This is a thin Lua wrapper around older Node code I used for Java/Bukkit.
+  There’s still some glue and “console popping up” behaviour.
+* It is **not** feature complete:
+
+  * No streaming “load more as you walk” yet
+  * `/visit` just builds a single island at a fixed spot `(0, 50, 0)` and teleports you there
+* Luanti still hiccups on large imports, even with VoxelManip. It’s much better than raw `set_node` loops, but it’s not magic.
+* If you hit weird issues (0 tiles, all-white, etc.), check:
+
+  * Luanti log for HTTP / security errors
+  * Node output in your terminal
+  * The cache folders for GLBs and JSON
+
+TLDR- Drop it in, `npm install`, set an API key with `/earth_apikey`, and start poking `/visit Paris`, `/visit Rome`, etc.

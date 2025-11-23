@@ -3,7 +3,7 @@ import path from 'path';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as THREE from 'three';
 import { voxelizeInNode } from './voxelizer.worker.js';
-import jpeg from 'jpeg-js';
+import sharp from 'sharp';
 
 const args = process.argv.slice(2);
 if (args.length < 2) {
@@ -43,13 +43,13 @@ async function serializeModel(model, gltf) {
                 const imageDef = images[i];
                 if (imageDef.bufferView !== undefined) {
                     const bufferView = await gltf.parser.getDependency('bufferView', imageDef.bufferView);
-                    const decoded = jpeg.decode(bufferView, { useTArray: true });
+                    const decoded = await sharp(bufferView).raw().ensureAlpha().toBuffer({ resolveWithObject: true });
                     globalTexture = {
-                        data: Array.from(decoded.data),
-                        width: decoded.width,
-                        height: decoded.height
+                        data: new Uint8ClampedArray(decoded.data),
+                        width: decoded.info.width,
+                        height: decoded.info.height
                     };
-                    console.log(`  Decoded global texture: ${decoded.width}x${decoded.height}`);
+                    console.log(`  Decoded global texture: ${decoded.info.width}x${decoded.info.height}`);
                     break; // Only use first image, like Java
                 }
             } catch (err) {
@@ -82,7 +82,7 @@ async function serializeModel(model, gltf) {
             if (globalTexture) {
                 m.map = {
                     imageUuid: GLOBAL_TEX_UUID,
-                    encoding: THREE.LinearEncoding,
+                    encoding: THREE.sRGBEncoding,
                     flipY: true,
                     wrapS: THREE.ClampToEdgeWrapping,
                     wrapT: THREE.ClampToEdgeWrapping,

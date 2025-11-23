@@ -53,7 +53,7 @@ local voxel_importer = dofile(modpath .. "/voxel_importer.lua")
 luanti_earth = {
     voxel_importer = voxel_importer,
     path = modpath,
-    use_pure_colors = false -- Default to false
+    use_pure_colors = true -- Default to true for pretty custom blocks
 }
 
 minetest.log("action", "[luanti_earth] Voxel-based mod loaded")

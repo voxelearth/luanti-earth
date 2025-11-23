@@ -16,6 +16,12 @@ local cache_root = worldpath .. "/luanti_earth_cache"
 -- Ensure root cache dir exists
 minetest.mkdir(cache_root)
 
+-- Seed RNG once so /visit spawn positions are different each time
+math.randomseed(os.time())
+
+-- Keep random within a safe chunk of the map (Minetest map limit is ~±30927)
+local RANDOM_SPAWN_RANGE = 20000
+
 --------------------------------------------------
 -- HTTP API (needs secure.http_mods = luanti_earth)
 --------------------------------------------------
@@ -268,13 +274,18 @@ minetest.register_chatcommand("visit", {
             minetest.chat_send_player(name, "Importing voxels into the world...")
             send_progress(name, 90, "Importing voxels...")
 
-            -- For now, fixed spawn position; you can later map lat/lng.
-            local spawn_pos = {x = 0, y = 50, z = 0}
+            -- Pick a random location **far away** to avoid overlapping visits
+            local spawn_pos = {
+                x = math.random(-RANDOM_SPAWN_RANGE, RANDOM_SPAWN_RANGE),
+                y = 50,
+                z = math.random(-RANDOM_SPAWN_RANGE, RANDOM_SPAWN_RANGE),
+            }
 
             -- Import from JSON dir; true = use_color / pure mode auto-detect
             local count = voxel_importer.import_from_directory(json_dir, spawn_pos, true)
 
-            minetest.chat_send_player(name, "Imported " .. count .. " blocks.")
+            minetest.chat_send_player(name, "Imported " .. count .. " blocks at (" ..
+                spawn_pos.x .. ", " .. spawn_pos.y .. ", " .. spawn_pos.z .. ").")
             send_progress(name, 100, "Done")
 
             -- Teleport player slightly above the structure

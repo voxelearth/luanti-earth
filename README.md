@@ -222,7 +222,7 @@ Writes a stripped-down JSON that’s easier to feed into a web visualizer. Mostl
 * It is **not** feature complete:
 
   * No streaming “load more as you walk” yet
-  * `/visit` just builds a single island at a fixed spot `(0, 50, 0)` and teleports you there
+  * `/visit` just builds a single island at a fixed random spot and teleports you there
 * Luanti still hiccups on large imports, even with VoxelManip. It’s much better than raw `set_node` loops, but it’s not magic.
 * If you hit weird issues (0 tiles, all-white, etc.), check:
 

@@ -72,18 +72,28 @@ function voxel_importer.load_voxel_file(filepath)
 end
 
 -- Import all JSON files from a directory
+-- Import all JSON files from a directory
 function voxel_importer.import_from_directory(dir_path, offset_pos, use_color)
-    local p = io.popen('dir "'..dir_path..'" /b /a-d')
-    if not p then return 0, "Could not list directory" end
-    
+    -- Use Luanti's safe directory listing instead of io.popen
+    if not minetest or not minetest.get_dir_list then
+        return 0, "minetest.get_dir_list not available"
+    end
+
+    -- false = list files, not subdirectories
+    local files = minetest.get_dir_list(dir_path, false)
+    if not files then
+        return 0, "Could not list directory: " .. tostring(dir_path)
+    end
+
     local total_placed = 0
-    for filename in p:lines() do
+
+    for _, filename in ipairs(files) do
         if filename:match("%.json$") then
             local full_path = dir_path .. "/" .. filename
             if minetest and minetest.log then
                 minetest.log("action", "[luanti_earth] Importing: " .. filename)
             end
-            
+
             local data, err = voxel_importer.load_voxel_file(full_path)
             if data then
                 local placed = voxel_importer.place_voxels(data, offset_pos, use_color)
@@ -95,7 +105,7 @@ function voxel_importer.import_from_directory(dir_path, offset_pos, use_color)
             end
         end
     end
-    p:close()
+
     return total_placed
 end
 

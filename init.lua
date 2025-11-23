@@ -76,7 +76,27 @@ for i = 0, 255 do
     end
 end
 
+--------------------------------------------------
+-- Progress bar helper
+--------------------------------------------------
+
+local function make_progress_bar(pct, width)
+    width = width or 20
+    if pct < 0 then pct = 0 end
+    if pct > 100 then pct = 100 end
+    local filled = math.floor((pct / 100) * width + 0.5)
+    local bar = string.rep("#", filled) .. string.rep(".", width - filled)
+    return "[" .. bar .. "] " .. pct .. "%"
+end
+
+local function send_progress(name, pct, stage)
+    minetest.chat_send_player(name, make_progress_bar(pct) .. " " .. stage)
+end
+
+--------------------------------------------------
 -- Chat command to toggle pure color mode
+--------------------------------------------------
+
 minetest.register_chatcommand("earth_use_pure_colors", {
     params = "<true/false>",
     description = "Toggle pure color mode (prioritizes solid colored blocks)",
@@ -151,6 +171,7 @@ minetest.register_chatcommand("visit", {
         end
 
         minetest.chat_send_player(name, "Geocoding '" .. param .. "'...")
+        send_progress(name, 5, "Geocoding location...")
 
         -- 1. Geocode
         local url = "https://maps.googleapis.com/maps/api/geocode/json?address=" ..
@@ -159,18 +180,21 @@ minetest.register_chatcommand("visit", {
         http.fetch({url = url, timeout = 10}, function(res)
             if not res.succeeded then
                 minetest.chat_send_player(name, "Geocoding failed: Request failed")
+                send_progress(name, 0, "Geocoding failed")
                 return
             end
 
             local data = minetest.parse_json(res.data)
             if not data or not data.results or #data.results == 0 then
                 minetest.chat_send_player(name, "Geocoding failed: Location not found")
+                send_progress(name, 0, "Location not found")
                 return
             end
 
             local loc = data.results[1].geometry.location
             local lat, lng = loc.lat, loc.lng
             minetest.chat_send_player(name, "Found: " .. lat .. ", " .. lng)
+            send_progress(name, 10, "Location resolved")
 
             --------------------------------------------------
             -- 2. Prepare directories (in world folder)
@@ -192,13 +216,16 @@ minetest.register_chatcommand("visit", {
                 minetest.chat_send_player(name,
                     "Server not configured to allow external commands.\n" ..
                     "Add luanti_earth to secure.trusted_mods and restart.")
+                send_progress(name, 0, "Missing insecure environment")
                 return
             end
 
             --------------------------------------------------
             -- 3. Download Tiles (Node.js)
             --------------------------------------------------
-            minetest.chat_send_player(name, "Downloading 3D Tiles... (Server may freeze)")
+            minetest.chat_send_player(name, "Downloading 3D Tiles... (this can take a bit)")
+            send_progress(name, 25, "Downloading 3D Tiles...")
+
             local node_cmd_dl = string.format(
                 'node "%s/tile_downloader.js" --key "%s" --lat %f --lng %f --radius 200 --out "%s"',
                 modpath, api_key, lat, lng, glb_dir
@@ -206,14 +233,20 @@ minetest.register_chatcommand("visit", {
 
             local ret_dl = os_execute(node_cmd_dl)
             if ret_dl ~= 0 and ret_dl ~= true then
-                minetest.chat_send_player(name, "Download failed. Make sure you ran 'npm install' in the Voxel Earth mod folder.")
+                minetest.chat_send_player(name,
+                    "Download failed. Make sure you ran 'npm install' in the Voxel Earth mod folder.")
+                send_progress(name, 0, "Download failed")
                 return
             end
+
+            send_progress(name, 50, "Download complete")
 
             --------------------------------------------------
             -- 4. Voxelize (Node.js)
             --------------------------------------------------
-            minetest.chat_send_player(name, "Voxelizing...")
+            minetest.chat_send_player(name, "Voxelizing tiles...")
+            send_progress(name, 60, "Voxelizing tiles...")
+
             local node_cmd_vox = string.format(
                 'node "%s/voxelize_tiles.js" "%s" "%s" 100',
                 modpath, glb_dir, json_dir
@@ -221,14 +254,19 @@ minetest.register_chatcommand("visit", {
 
             local ret_vox = os_execute(node_cmd_vox)
             if ret_vox ~= 0 and ret_vox ~= true then
-                minetest.chat_send_player(name, "Voxelization failed.")
+                minetest.chat_send_player(name,
+                    "Voxelization failed.")
+                send_progress(name, 0, "Voxelization failed")
                 return
             end
+
+            send_progress(name, 80, "Voxelization complete")
 
             --------------------------------------------------
             -- 5. Import into the world
             --------------------------------------------------
-            minetest.chat_send_player(name, "Importing voxels...")
+            minetest.chat_send_player(name, "Importing voxels into the world...")
+            send_progress(name, 90, "Importing voxels...")
 
             -- For now, fixed spawn position; you can later map lat/lng.
             local spawn_pos = {x = 0, y = 50, z = 0}
@@ -237,6 +275,7 @@ minetest.register_chatcommand("visit", {
             local count = voxel_importer.import_from_directory(json_dir, spawn_pos, true)
 
             minetest.chat_send_player(name, "Imported " .. count .. " blocks.")
+            send_progress(name, 100, "Done")
 
             -- Teleport player slightly above the structure
             player:set_pos({x = spawn_pos.x, y = spawn_pos.y + 20, z = spawn_pos.z})
@@ -259,19 +298,23 @@ minetest.register_chatcommand("earth_load_voxels", {
         end
 
         minetest.chat_send_player(name, "Loading voxel data from: " .. param)
+        send_progress(name, 10, "Loading voxel JSON...")
 
         -- Load voxel data
         local voxel_data, err = voxel_importer.load_voxel_file(param)
         if not voxel_data then
+            send_progress(name, 0, "Load failed")
             return false, "Failed to load: " .. (err or "unknown error")
         end
 
         minetest.chat_send_player(name,
             string.format("Loaded %d voxels. Placing...", voxel_data.voxelCount or 0))
+        send_progress(name, 40, "Placing voxels...")
 
         -- Get player position as offset
         local player = minetest.get_player_by_name(name)
         if not player then
+            send_progress(name, 0, "Player not found")
             return false, "Player not found."
         end
 
@@ -280,6 +323,7 @@ minetest.register_chatcommand("earth_load_voxels", {
         -- Place voxels with color mapping
         local placed = voxel_importer.place_voxels(voxel_data, pos, true)
 
+        send_progress(name, 100, "Done")
         minetest.chat_send_player(name,
             string.format("Placed %d blocks!", placed))
 
@@ -302,18 +346,27 @@ minetest.register_chatcommand("earth_export_viz", {
             return false, "Usage: /earth_export_viz <input_json> <output_json>"
         end
 
+        minetest.chat_send_player(name,
+            "Exporting voxel data from " .. input_path .. " to " .. output_path .. "...")
+        send_progress(name, 20, "Loading voxel JSON...")
+
         -- Load voxel data
         local voxel_data, err = voxel_importer.load_voxel_file(input_path)
         if not voxel_data then
+            send_progress(name, 0, "Load failed")
             return false, "Failed to load: " .. (err or "unknown error")
         end
+
+        send_progress(name, 60, "Writing export JSON...")
 
         -- Export for viz
         local success, err_msg = voxel_importer.export_for_viz(voxel_data, output_path)
         if not success then
+            send_progress(name, 0, "Export failed")
             return false, "Export failed: " .. (err_msg or "unknown error")
         end
 
+        send_progress(name, 100, "Export complete")
         return true, "Exported to: " .. output_path
     end
 })

@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voxel Visualizer - Luanti Earth</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #1a1a1a;
+            color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 100;
+            background: rgba(0, 0, 0, 0.85);
+            padding: 15px;
+            border-radius: 8px;
+            max-width: 400px;
+        }
+
+        #controls {
+            margin-top: 15px;
+        }
+
+        textarea {
+            width: 100%;
+            height: 150px;
+            background: #222;
+            color: #0f0;
+            border: 1px solid #555;
+            font-family: monospace;
+            font-size: 12px;
+            padding: 5px;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            cursor: pointer;
+            border-radius: 4px;
+            margin: 5px 0;
+            font-weight: bold;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(102, 126, 234, 0.4);
+        }
+
+        #status {
+            display: block;
+            margin-top: 10px;
+            padding: 5px;
+            background: #333;
+            border-radius: 4px;
+        }
+
+        h3 {
+            margin: 0 0 10px 0;
+            color: #667eea;
+        }
+
+        .hint {
+            font-size: 11px;
+            color: #999;
+            margin-top: 5px;
+        }
+    </style>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+
+<body>
+    <div id="info">
+        <h3>🌍 Voxel Visualizer</h3>
+        <p>Paste <code>voxels.json</code> content below:</p>
+        <textarea id="jsonInput" placeholder='Paste JSON here...'></textarea>
+        <div id="controls">
+            <button onclick="loadBlocks()">✨ Visualize</button>
+            <button onclick="resetCamera()">📷 Reset Camera</button>
+            <button onclick="toggleWireframe()">🔲 Toggle Wireframe</button>
+            <span id="status">Ready</span>
+            <div class="hint">💡 Use mouse to orbit, scroll to zoom</div>
+        </div>
+    </div>
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        let scene, camera, renderer, controls, instancedMesh;
+        let wireframe = false;
+
+        init();
+        animate();
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0a0a0a);
+            scene.fog = new THREE.Fog(0x0a0a0a, 50, 200);
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(50, 30, 50);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.body.appendChild(renderer.domElement);
+
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.minDistance = 5;
+            controls.maxDistance = 500;
+
+            // Lights
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.5);
+            scene.add(ambientLight);
+
+            const dirLight1 = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight1.position.set(10, 20, 10);
+            scene.add(dirLight1);
+
+            const dirLight2 = new THREE.DirectionalLight(0x6699ff, 0.4);
+            dirLight2.position.set(-10, 10, -10);
+            scene.add(dirLight2);
+
+            // Grid
+            const gridHelper = new THREE.GridHelper(200, 40, 0x444444, 0x222222);
+            scene.add(gridHelper);
+
+            // Axes
+            const axesHelper = new THREE.AxesHelper(10);
+            scene.add(axesHelper);
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        window.loadBlocks = function () {
+            const input = document.getElementById('jsonInput').value.trim();
+            const status = document.getElementById('status');
+
+            if (!input) {
+                status.innerText = "⚠️ Please paste JSON data first";
+                status.style.background = "#662200";
+                return;
+            }
+
+            try {
+                const data = JSON.parse(input);
+
+                // Support both formats: array of blocks or voxel data object
+                let blocks = [];
+                if (Array.isArray(data)) {
+                    blocks = data;
+                } else if (data.voxels) {
+                    blocks = data.voxels;
+                } else {
+                    throw new Error("Invalid format: expected array or object with 'voxels' property");
+                }
+
+                status.innerText = `✅ Loaded ${blocks.length} voxels`;
+                status.style.background = "#004400";
+                renderBlocks(blocks);
+            } catch (e) {
+                status.innerText = `❌ Error: ${e.message}`;
+                status.style.background = "#660000";
+            }
+        };
+
+        function renderBlocks(blocks) {
+            if (instancedMesh) {
+                scene.remove(instancedMesh);
+                instancedMesh.geometry.dispose();
+                instancedMesh.material.dispose();
+            }
+
+            const geometry = new THREE.BoxGeometry(1, 1, 1);
+            const material = new THREE.MeshLambertMaterial({
+                vertexColors: true,
+                wireframe: wireframe
+            });
+
+            instancedMesh = new THREE.InstancedMesh(geometry, material, blocks.length);
+            instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+
+            const dummy = new THREE.Object3D();
+            const color = new THREE.Color();
+
+            // Calculate center
+            let minX = Infinity, minY = Infinity, minZ = Infinity;
+            let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+
+            for (let i = 0; i < blocks.length; i++) {
+                const b = blocks[i];
+                const x = b.x !== undefined ? b.x : (b.wx || 0);
+                const y = b.y !== undefined ? b.y : (b.wy || 0);
+                const z = b.z !== undefined ? b.z : (b.wz || 0);
+
+                if (x < minX) minX = x;
+                if (y < minY) minY = y;
+                if (z < minZ) minZ = z;
+                if (x > maxX) maxX = x;
+                if (y > maxY) maxY = y;
+                if (z > maxZ) maxZ = z;
+
+                dummy.position.set(x, y, z);
+                dummy.updateMatrix();
+                instancedMesh.setMatrixAt(i, dummy.matrix);
+
+                // Set color from voxel data
+                if (b.r !== undefined && b.g !== undefined && b.b !== undefined) {
+                    color.setRGB(b.r / 255, b.g / 255, b.b / 255);
+                } else {
+                    color.setHex(0x44ff44); // Default green
+                }
+                instancedMesh.setColorAt(i, color);
+            }
+
+            instancedMesh.instanceMatrix.needsUpdate = true;
+            if (instancedMesh.instanceColor) {
+                instancedMesh.instanceColor.needsUpdate = true;
+            }
+
+            scene.add(instancedMesh);
+
+            // Center camera on the model
+            const cx = (minX + maxX) / 2;
+            const cy = (minY + maxY) / 2;
+            const cz = (minZ + maxZ) / 2;
+
+            const size = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
+            const distance = size * 1.5;
+
+            controls.target.set(cx, cy, cz);
+            camera.position.set(cx + distance, cy + distance * 0.6, cz + distance);
+        }
+
+        window.resetCamera = function () {
+            if (instancedMesh) {
+                controls.reset();
+            }
+        };
+
+        window.toggleWireframe = function () {
+            wireframe = !wireframe;
+            if (instancedMesh) {
+                instancedMesh.material.wireframe = wireframe;
+            }
+        };
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+
+</html>

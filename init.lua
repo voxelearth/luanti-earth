@@ -1,0 +1,75 @@
+-- Luanti Earth Mod
+-- Loads voxelized Google Earth 3D tiles
+
+local modpath = minetest.get_modpath("luanti_earth")
+
+-- Load voxel importer
+local voxel_importer = dofile(modpath .. "/voxel_importer.lua")
+
+luanti_earth = {
+    voxel_importer = voxel_importer,
+    path = modpath
+}
+
+minetest.log("action", "[luanti_earth] Voxel-based mod loaded")
+
+-- Chat command to load voxel data
+minetest.register_chatcommand("earth_load_voxels", {
+    params = "<voxel_json_path>",
+    description = "Load and place voxelized tile data from a JSON file",
+    privs = {server = true},
+    func = function(name, param)
+        if param == "" then
+            return false, "Usage: /earth_load_voxels <path_to_voxel_json>"
+        end
+        
+        minetest.chat_send_player(name, "Loading voxel data from: " .. param)
+        
+        -- Load voxel data
+        local voxel_data, err = voxel_importer.load_voxel_file(param)
+        if not voxel_data then
+            return false, "Failed to load: " .. (err or "unknown error")
+        end
+        
+        minetest.chat_send_player(name, string.format("Loaded %d voxels. Placing...", voxel_data.voxelCount or 0))
+        
+        -- Get player position as offset
+        local player = minetest.get_player_by_name(name)
+        local pos = player:get_pos()
+        
+        -- Place voxels with color mapping
+        local placed = voxel_importer.place_voxels(voxel_data, pos, true)
+        
+        minetest.chat_send_player(name, string.format("Placed %d blocks!", placed))
+        
+        return true
+    end
+})
+
+-- Chat command to export voxels for visualization
+minetest.register_chatcommand("earth_export_viz", {
+    params = "<input_json> <output_json>",
+    description = "Export voxel data to simplified format for web visualizer",
+    privs = {server = true},
+    func = function(name, param)
+        local input_path, output_path = string.match(param, "^(%S+)%s+(%S+)$")
+        
+        if not input_path or not output_path then
+            return false, "Usage: /earth_export_viz <input_json> <output_json>"
+        end
+        
+        -- Load voxel data  
+        local voxel_data, err = voxel_importer.load_voxel_file(input_path)
+        if not voxel_data then
+            return false, "Failed to load: " .. (err or "unknown error")
+        end
+        
+        -- Export for viz
+        local success, err_msg = voxel_importer.export_for_viz(voxel_data, output_path)
+        if not success then
+            return false, "Export failed: " .. (err_msg or "unknown error")
+        end
+        
+        return true, "Exported to: " .. output_path
+    end
+})

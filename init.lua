@@ -206,7 +206,7 @@ minetest.register_chatcommand("visit", {
 
             local ret_dl = os_execute(node_cmd_dl)
             if ret_dl ~= 0 and ret_dl ~= true then
-                minetest.chat_send_player(name, "Download failed.")
+                minetest.chat_send_player(name, "Download failed. Make sure you ran 'npm install' in the Voxel Earth mod folder.")
                 return
             end
 

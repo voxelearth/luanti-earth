@@ -298,10 +298,20 @@ function voxel_importer.place_voxels(voxel_data, offset_pos, use_color)
     local offset = offset_pos or {x=0, y=0, z=0}
 
     for _, voxel in ipairs(voxel_data.voxels) do
+        -- Prefer world-space coords from Node JSON if present
+        local vx = voxel.wx or voxel.x
+        local vy = voxel.wy or voxel.y
+        local vz = voxel.wz or voxel.z
+
+        -- Fallback if somehow missing
+        vx = vx or 0
+        vy = vy or 0
+        vz = vz or 0
+
         local pos = {
-            x = offset.x + math.floor(voxel.x),
-            y = offset.y + math.floor(voxel.y),
-            z = offset.z + math.floor(voxel.z)
+            x = offset.x + math.floor(vx),
+            y = offset.y + math.floor(vy),
+            z = offset.z + math.floor(vz)
         }
 
         local block_name
@@ -311,11 +321,11 @@ function voxel_importer.place_voxels(voxel_data, offset_pos, use_color)
             block_name = get_safe_node("default:stone")
         end
 
-        -- Place block with safety net again just in case
         local final_name = get_safe_node(block_name)
         minetest.set_node(pos, { name = final_name })
         placed = placed + 1
     end
+
 
     return placed
 end

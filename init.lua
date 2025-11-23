@@ -76,6 +76,25 @@ for i = 0, 255 do
     end
 end
 
+-- Chat command to toggle pure color mode
+minetest.register_chatcommand("earth_use_pure_colors", {
+    params = "<true/false>",
+    description = "Toggle pure color mode (prioritizes solid colored blocks)",
+    privs = {server = true},
+    func = function(name, param)
+        if param == "true" then
+            luanti_earth.use_pure_colors = true
+            minetest.chat_send_player(name, "Pure color mode ENABLED. Future imports will prioritize solid colored blocks.")
+        elseif param == "false" then
+            luanti_earth.use_pure_colors = false
+            minetest.chat_send_player(name, "Pure color mode DISABLED. Future imports will use natural blocks.")
+        else
+            return false, "Usage: /earth_use_pure_colors <true/false>"
+        end
+        return true
+    end
+})
+
 --------------------------------------------------
 -- API key storage & commands
 --------------------------------------------------

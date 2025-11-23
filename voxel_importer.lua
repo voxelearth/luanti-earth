@@ -71,6 +71,34 @@ function voxel_importer.load_voxel_file(filepath)
     return data
 end
 
+-- Import all JSON files from a directory
+function voxel_importer.import_from_directory(dir_path, offset_pos, use_color)
+    local p = io.popen('dir "'..dir_path..'" /b /a-d')
+    if not p then return 0, "Could not list directory" end
+    
+    local total_placed = 0
+    for filename in p:lines() do
+        if filename:match("%.json$") then
+            local full_path = dir_path .. "/" .. filename
+            if minetest and minetest.log then
+                minetest.log("action", "[luanti_earth] Importing: " .. filename)
+            end
+            
+            local data, err = voxel_importer.load_voxel_file(full_path)
+            if data then
+                local placed = voxel_importer.place_voxels(data, offset_pos, use_color)
+                total_placed = total_placed + placed
+            else
+                if minetest and minetest.log then
+                    minetest.log("error", "[luanti_earth] Failed to load " .. filename .. ": " .. tostring(err))
+                end
+            end
+        end
+    end
+    p:close()
+    return total_placed
+end
+
 -- Palette of blocks with their average RGB values
 -- Priority: Mineclonia (mcl_*) > Minetest Game (default, wool)
 -- Strict filtering: Full, solid blocks only. No falling blocks (sand, gravel).

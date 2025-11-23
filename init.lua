@@ -14,6 +14,22 @@ luanti_earth = {
 
 minetest.log("action", "[luanti_earth] Voxel-based mod loaded")
 
+-- Load colors
+local colors = dofile(modpath .. "/colors.lua")
+
+-- Register pure color nodes
+for i = 0, 255 do
+    local hex = colors[tostring(i)]
+    if hex then
+        minetest.register_node("luanti_earth:color_" .. i, {
+            description = "Pure Color " .. i .. " (" .. hex .. ")",
+            tiles = {"default_stone.png^[colorize:" .. hex .. ":255"},
+            groups = {cracky = 3, oddly_breakable_by_hand = 3},
+            is_ground_content = false,
+        })
+    end
+end
+
 -- Chat command to toggle pure color mode
 minetest.register_chatcommand("earth_use_pure_colors", {
     params = "<true/false>",

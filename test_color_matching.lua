@@ -57,6 +57,7 @@ minetest = {
         ["mcl_core:grass_block_green"] = true,
         ["mcl_core:snow"] = true,
     },
+    get_modpath = function(modname) return "." end,
     log = function(level, msg) print("["..level.."] "..msg) end
 }
 
@@ -92,9 +93,9 @@ print("--------------------------------")
 luanti_earth.use_pure_colors = true
 
 local pure_tests = {
-    {r=128, g=128, b=128, expected="mcl_color:concrete_silver"}, -- or wool:grey
-    {r=200, g=0,   b=0,   expected="mcl_color:concrete_red"},
-    {r=100, g=150, b=50,  expected="mcl_color:concrete_green"}, -- Should NOT be dirt/grass
+    {r=255, g=255, b=255, expected="luanti_earth:color_0"},   -- #FFFFFF
+    {r=0,   g=0,   b=0,   expected="luanti_earth:color_255"}, -- #000000
+    {r=255, g=0,   b=0,   expected="luanti_earth:color_20"},  -- #FF0000
 }
 
 for _, tc in ipairs(pure_tests) do

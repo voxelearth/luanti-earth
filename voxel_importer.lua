@@ -185,20 +185,57 @@ local BLOCK_PALETTE = {
     {name="default:brick",           r=150, g=50,  b=50},
 }
 
+-- Load colors for pure mode
+local colors = dofile(minetest.get_modpath("luanti_earth") .. "/colors.lua")
+local color_cache = {}
+
+-- Helper to parse hex to RGB
+local function hex_to_rgb(hex)
+    hex = hex:gsub("#","")
+    return tonumber("0x"..hex:sub(1,2)), tonumber("0x"..hex:sub(3,4)), tonumber("0x"..hex:sub(5,6))
+end
+
+-- Pre-calculate RGB values for palette
+local PURE_PALETTE = {}
+for id, hex in pairs(colors) do
+    local r, g, b = hex_to_rgb(hex)
+    table.insert(PURE_PALETTE, {id=id, r=r, g=g, b=b})
+end
+
 -- Convert RGB to closest Luanti block type using Euclidean distance
 function voxel_importer.rgb_to_block(r, g, b)
-    local min_dist = math.huge
-    local best_block = "default:stone" -- Fallback
-    
     -- Check pure color mode setting
     local use_pure = false
     if luanti_earth and luanti_earth.use_pure_colors then
         use_pure = true
     end
 
-    for _, block in ipairs(BLOCK_PALETTE) do
-        -- If pure mode is on, skip non-pure blocks
-        if not use_pure or block.pure then
+    if use_pure then
+        -- Pure Color Mode: Match against generated color nodes
+        local min_dist = math.huge
+        local best_id = "0"
+
+        for _, col in ipairs(PURE_PALETTE) do
+            local dr = r - col.r
+            local dg = g - col.g
+            local db = b - col.b
+            local dist_sq = dr*dr + dg*dg + db*db
+
+            if dist_sq < min_dist then
+                min_dist = dist_sq
+                best_id = col.id
+            end
+        end
+        return "luanti_earth:color_" .. best_id
+    else
+        -- Natural Mode: Match against existing blocks
+        local min_dist = math.huge
+        local best_block = "default:stone" -- Fallback
+
+        for _, block in ipairs(BLOCK_PALETTE) do
+            -- Skip pure-only blocks in natural mode (if any were marked pure-only, but we removed that flag usage)
+            -- Actually, we can just use the full palette now.
+            
             local dr = r - block.r
             local dg = g - block.g
             local db = b - block.b
@@ -209,9 +246,8 @@ function voxel_importer.rgb_to_block(r, g, b)
                 best_block = block.name
             end
         end
+        return get_safe_node(best_block)
     end
-
-    return get_safe_node(best_block)
 end
 
 -- Place voxels in the world at a given offset

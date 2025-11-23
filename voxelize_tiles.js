@@ -25,6 +25,7 @@ if (!fs.existsSync(outputDir)) {
 }
 
 const loader = new GLTFLoader();
+const GLOBAL_TEX_UUID = 'global-texture-00000000'; // Constant UUID for first texture
 
 async function serializeModel(model, gltf) {
     const meshes = [];
@@ -33,7 +34,8 @@ async function serializeModel(model, gltf) {
 
     model.updateWorldMatrix(true, true);
 
-    // Extract images
+    // Decode FIRST image only (like Java implementation)
+    let globalTexture = null;
     if (gltf && gltf.parser && gltf.parser.json && gltf.parser.json.images) {
         const images = gltf.parser.json.images;
         for (let i = 0; i < images.length; i++) {
@@ -42,12 +44,13 @@ async function serializeModel(model, gltf) {
                 if (imageDef.bufferView !== undefined) {
                     const bufferView = await gltf.parser.getDependency('bufferView', imageDef.bufferView);
                     const decoded = jpeg.decode(bufferView, { useTArray: true });
-                    imageDatas.push([i.toString(), {
+                    globalTexture = {
                         data: Array.from(decoded.data),
                         width: decoded.width,
                         height: decoded.height
-                    }]);
-                    console.log(`  Decoded image ${i}: ${decoded.width}x${decoded.height}`);
+                    };
+                    console.log(`  Decoded global texture: ${decoded.width}x${decoded.height}`);
+                    break; // Only use first image, like Java
                 }
             } catch (err) {
                 console.warn(`  Failed to load image ${i}:`, err.message);
@@ -75,19 +78,19 @@ async function serializeModel(model, gltf) {
                 emissive: mat.emissive ? mat.emissive.getHex() : undefined,
             };
 
-            if (mat.map && gltf.parser.json) {
-                const materials = gltf.parser.json.materials || [];
-                const textures = gltf.parser.json.textures || [];
-                for (let i = 0; i < materials.length; i++) {
-                    if (materials[i].pbrMetallicRoughness?.baseColorTexture) {
-                        const texIdx = materials[i].pbrMetallicRoughness.baseColorTexture.index;
-                        const imageIdx = textures[texIdx]?.source;
-                        if (imageIdx !== undefined) {
-                            m.map = imageIdx.toString();
-                            break;
-                        }
-                    }
-                }
+            //  Assign global texture to ALL materials (like Java implementation)
+            if (globalTexture) {
+                m.map = {
+                    imageUuid: GLOBAL_TEX_UUID,
+                    encoding: THREE.LinearEncoding,
+                    flipY: true,
+                    wrapS: THREE.ClampToEdgeWrapping,
+                    wrapT: THREE.ClampToEdgeWrapping,
+                    offset: [0, 0],
+                    repeat: [1, 1],
+                    rotation: 0,
+                    center: [0, 0]
+                };
             }
 
             materialStore.set(mat.uuid, m);
@@ -120,6 +123,12 @@ async function serializeModel(model, gltf) {
             matrixWorld: o.matrixWorld.toArray()
         });
     });
+
+    // Add global texture to imageDatas if it exists
+    if (globalTexture) {
+        imageDatas.push([GLOBAL_TEX_UUID, globalTexture]);
+        console.log(`  Global texture mapped with UUID: ${GLOBAL_TEX_UUID}`);
+    }
 
     const centeredBBox = new THREE.Box3(
         new THREE.Vector3(bbox.min.x - center.x, bbox.min.y - center.y, bbox.min.z - center.z),

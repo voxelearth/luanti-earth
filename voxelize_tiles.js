@@ -43,7 +43,7 @@ async function serializeModel(model, gltf) {
                 const imageDef = images[i];
                 if (imageDef.bufferView !== undefined) {
                     const bufferView = await gltf.parser.getDependency('bufferView', imageDef.bufferView);
-                    const decoded = await sharp(bufferView).raw().ensureAlpha().toBuffer({ resolveWithObject: true });
+                    const decoded = await sharp(bufferView).raw().flip().ensureAlpha().toBuffer({ resolveWithObject: true });
                     globalTexture = {
                         data: new Uint8ClampedArray(decoded.data),
                         width: decoded.info.width,

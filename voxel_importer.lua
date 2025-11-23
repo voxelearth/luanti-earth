@@ -294,41 +294,113 @@ function voxel_importer.place_voxels(voxel_data, offset_pos, use_color)
         return 0, "Invalid voxel data"
     end
 
-    local placed = 0
-    local offset = offset_pos or {x=0, y=0, z=0}
-
-    for _, voxel in ipairs(voxel_data.voxels) do
-        -- Prefer world-space coords from Node JSON if present
-        local vx = voxel.wx or voxel.x
-        local vy = voxel.wy or voxel.y
-        local vz = voxel.wz or voxel.z
-
-        -- Fallback if somehow missing
-        vx = vx or 0
-        vy = vy or 0
-        vz = vz or 0
-
-        local pos = {
-            x = offset.x + math.floor(vx),
-            y = offset.y + math.floor(vy),
-            z = offset.z + math.floor(vz)
-        }
-
-        local block_name
-        if use_color and voxel.r and voxel.g and voxel.b then
-            block_name = voxel_importer.rgb_to_block(voxel.r, voxel.g, voxel.b)
-        else
-            block_name = get_safe_node("default:stone")
-        end
-
-        local final_name = get_safe_node(block_name)
-        minetest.set_node(pos, { name = final_name })
-        placed = placed + 1
+    local voxels = voxel_data.voxels
+    if #voxels == 0 then
+        return 0
     end
 
+    local offset = offset_pos or { x = 0, y = 0, z = 0 }
+
+    -- First pass: compute world-space positions & bounds
+    local world_voxels = {}
+    local min_x, min_y, min_z = math.huge, math.huge, math.huge
+    local max_x, max_y, max_z = -math.huge, -math.huge, -math.huge
+
+    for i = 1, #voxels do
+        local v = voxels[i]
+
+        -- Prefer world-space coords from Node JSON if present
+        local vx = v.wx or v.x or 0
+        local vy = v.wy or v.y or 0
+        local vz = v.wz or v.z or 0
+
+        local wx = offset.x + math.floor(vx)
+        local wy = offset.y + math.floor(vy)
+        local wz = offset.z + math.floor(vz)
+
+        world_voxels[#world_voxels + 1] = {
+            x = wx,
+            y = wy,
+            z = wz,
+            r = v.r,
+            g = v.g,
+            b = v.b,
+        }
+
+        if wx < min_x then min_x = wx end
+        if wy < min_y then min_y = wy end
+        if wz < min_z then min_z = wz end
+        if wx > max_x then max_x = wx end
+        if wy > max_y then max_y = wy end
+        if wz > max_z then max_z = wz end
+    end
+
+    -- Safety: if bounds are insane, bail
+    if min_x == math.huge then
+        return 0, "No valid voxels"
+    end
+
+    local p1 = { x = min_x, y = min_y, z = min_z }
+    local p2 = { x = max_x, y = max_y, z = max_z }
+
+    -- VoxelManip setup
+    local vm = minetest.get_voxel_manip(p1, p2)
+    if not vm then
+        return 0, "Failed to get voxel manip"
+    end
+
+    local emin, emax = vm:read_from_map(p1, p2)
+    local data = vm:get_data()
+    local area = VoxelArea:new({ MinEdge = emin, MaxEdge = emax })
+
+    -- Cache content IDs for block names so we don't call get_content_id constantly
+    local cid_cache = {}
+    local function get_cid(node_name)
+        local cid = cid_cache[node_name]
+        if cid ~= nil then
+            return cid
+        end
+        cid = minetest.get_content_id(node_name)
+        -- 0 = unknown/air; fall back to default:stone safety net
+        if cid == 0 then
+            node_name = get_safe_node("default:stone")
+            cid = minetest.get_content_id(node_name)
+        end
+        cid_cache[node_name] = cid
+        return cid
+    end
+
+    local placed = 0
+
+    -- Second pass: fill VoxelManip data array
+    for i = 1, #world_voxels do
+        local v = world_voxels[i]
+        local idx = area:index(v.x, v.y, v.z)
+        if idx then
+            local block_name
+            if use_color and v.r and v.g and v.b then
+                block_name = voxel_importer.rgb_to_block(v.r, v.g, v.b)
+            else
+                block_name = get_safe_node("default:stone")
+            end
+
+            local final_name = get_safe_node(block_name)
+            local cid = get_cid(final_name)
+            if cid and cid ~= 0 then
+                data[idx] = cid
+                placed = placed + 1
+            end
+        end
+    end
+
+    -- Write back to map
+    vm:set_data(data)
+    vm:write_to_map()
+    vm:update_map()
 
     return placed
 end
+
 
 -- Export voxel data to a simpler format for visualization
 function voxel_importer.export_for_viz(voxel_data, output_path)

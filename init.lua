@@ -200,7 +200,7 @@ minetest.register_chatcommand("visit", {
             --------------------------------------------------
             minetest.chat_send_player(name, "Downloading 3D Tiles... (Server may freeze)")
             local node_cmd_dl = string.format(
-                'node "%s/tile_downloader.js" --key "%s" --lat %f --lng %f --radius 100 --out "%s"',
+                'node "%s/tile_downloader.js" --key "%s" --lat %f --lng %f --radius 200 --out "%s"',
                 modpath, api_key, lat, lng, glb_dir
             )
 

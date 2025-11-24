@@ -14,5 +14,5 @@ struct VoxelGrid {
 
 class Voxelizer {
 public:
-    VoxelGrid voxelize(const std::vector<unsigned char>& glbData, int resolution);
+    VoxelGrid voxelize(const std::vector<unsigned char>& glbData, int resolution, double originX, double originY, double originZ);
 };

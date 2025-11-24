@@ -289,50 +289,87 @@ function voxel_importer.rgb_to_block(r, g, b)
 end
 
 -- Place voxels in the world at a given offset
+-- Helper to read int32 little endian
+local function read_int32_le(str, offset)
+    local b1 = string.byte(str, offset)
+    local b2 = string.byte(str, offset + 1)
+    local b3 = string.byte(str, offset + 2)
+    local b4 = string.byte(str, offset + 3)
+    -- Lua 5.1 numbers are doubles, so this works for 32-bit ints
+    local n = b1 + b2*256 + b3*65536 + b4*16777216
+    -- Handle signedness (2's complement)
+    if n > 2147483647 then n = n - 4294967296 end
+    return n
+end
+
+-- Place voxels in the world at a given offset
 function voxel_importer.place_voxels(voxel_data, offset_pos, use_color)
-    if not voxel_data or not voxel_data.voxels then
+    if not voxel_data then
         return 0, "Invalid voxel data"
     end
 
+    local offset = offset_pos or { x = 0, y = 0, z = 0 }
+    
+    -- Check if we have binary data or legacy table
+    local is_binary = (voxel_data.voxel_bytes ~= nil)
     local voxels = voxel_data.voxels
-    if #voxels == 0 then
+    
+    if not is_binary and (not voxels or #voxels == 0) then
         return 0
     end
 
-    local offset = offset_pos or { x = 0, y = 0, z = 0 }
-
     -- First pass: compute world-space positions & bounds
-    local world_voxels = {}
+    -- We'll store parsed voxels in a flat table for the second pass
+    -- Structure: {x, y, z, r, g, b}
+    -- To save memory in Lua, we could try to avoid this, but we need bounds first.
+    -- Actually, we can do two passes over the string to avoid allocating a huge table!
+    
     local min_x, min_y, min_z = math.huge, math.huge, math.huge
     local max_x, max_y, max_z = -math.huge, -math.huge, -math.huge
-
-    for i = 1, #voxels do
-        local v = voxels[i]
-
-        -- Prefer world-space coords from Node JSON if present
-        local vx = v.wx or v.x or 0
-        local vy = v.wy or v.y or 0
-        local vz = v.wz or v.z or 0
-
-        local wx = offset.x + math.floor(vx)
-        local wy = offset.y + math.floor(vy)
-        local wz = offset.z + math.floor(vz)
-
-        world_voxels[#world_voxels + 1] = {
-            x = wx,
-            y = wy,
-            z = wz,
-            r = v.r,
-            g = v.g,
-            b = v.b,
-        }
-
-        if wx < min_x then min_x = wx end
-        if wy < min_y then min_y = wy end
-        if wz < min_z then min_z = wz end
-        if wx > max_x then max_x = wx end
-        if wy > max_y then max_y = wy end
-        if wz > max_z then max_z = wz end
+    
+    local count = 0
+    
+    if is_binary then
+        local bytes = voxel_data.voxel_bytes
+        local len = #bytes
+        local stride = 16 -- x(4), y(4), z(4), r(1), g(1), b(1), a(1)
+        
+        for i = 1, len, stride do
+            local vx = read_int32_le(bytes, i)
+            local vy = read_int32_le(bytes, i+4)
+            local vz = read_int32_le(bytes, i+8)
+            
+            local wx = offset.x + vx
+            local wy = offset.y + vy
+            local wz = offset.z + vz
+            
+            if wx < min_x then min_x = wx end
+            if wy < min_y then min_y = wy end
+            if wz < min_z then min_z = wz end
+            if wx > max_x then max_x = wx end
+            if wy > max_y then max_y = wy end
+            if wz > max_z then max_z = wz end
+            count = count + 1
+        end
+    else
+        -- Legacy table path
+        for i = 1, #voxels do
+            local v = voxels[i]
+            local vx = v.wx or v.x or 0
+            local vy = v.wy or v.y or 0
+            local vz = v.wz or v.z or 0
+            local wx = offset.x + math.floor(vx)
+            local wy = offset.y + math.floor(vy)
+            local wz = offset.z + math.floor(vz)
+            
+            if wx < min_x then min_x = wx end
+            if wy < min_y then min_y = wy end
+            if wz < min_z then min_z = wz end
+            if wx > max_x then max_x = wx end
+            if wy > max_y then max_y = wy end
+            if wz > max_z then max_z = wz end
+            count = count + 1
+        end
     end
 
     -- Safety: if bounds are insane, bail
@@ -353,15 +390,12 @@ function voxel_importer.place_voxels(voxel_data, offset_pos, use_color)
     local data = vm:get_data()
     local area = VoxelArea:new({ MinEdge = emin, MaxEdge = emax })
 
-    -- Cache content IDs for block names so we don't call get_content_id constantly
+    -- Cache content IDs
     local cid_cache = {}
     local function get_cid(node_name)
         local cid = cid_cache[node_name]
-        if cid ~= nil then
-            return cid
-        end
+        if cid ~= nil then return cid end
         cid = minetest.get_content_id(node_name)
-        -- 0 = unknown/air; fall back to default:stone safety net
         if cid == 0 then
             node_name = get_safe_node("default:stone")
             cid = minetest.get_content_id(node_name)
@@ -373,22 +407,67 @@ function voxel_importer.place_voxels(voxel_data, offset_pos, use_color)
     local placed = 0
 
     -- Second pass: fill VoxelManip data array
-    for i = 1, #world_voxels do
-        local v = world_voxels[i]
-        local idx = area:index(v.x, v.y, v.z)
-        if idx then
-            local block_name
-            if use_color and v.r and v.g and v.b then
-                block_name = voxel_importer.rgb_to_block(v.r, v.g, v.b)
-            else
-                block_name = get_safe_node("default:stone")
-            end
+    if is_binary then
+        local bytes = voxel_data.voxel_bytes
+        local len = #bytes
+        local stride = 16
+        
+        for i = 1, len, stride do
+            local vx = read_int32_le(bytes, i)
+            local vy = read_int32_le(bytes, i+4)
+            local vz = read_int32_le(bytes, i+8)
+            local r = string.byte(bytes, i+12)
+            local g = string.byte(bytes, i+13)
+            local b = string.byte(bytes, i+14)
+            -- a is at i+15, unused
+            
+            local wx = offset.x + vx
+            local wy = offset.y + vy
+            local wz = offset.z + vz
+            
+            local idx = area:index(wx, wy, wz)
+            if idx then
+                local block_name
+                if use_color then
+                    block_name = voxel_importer.rgb_to_block(r, g, b)
+                else
+                    block_name = get_safe_node("default:stone")
+                end
 
-            local final_name = get_safe_node(block_name)
-            local cid = get_cid(final_name)
-            if cid and cid ~= 0 then
-                data[idx] = cid
-                placed = placed + 1
+                local final_name = get_safe_node(block_name)
+                local cid = get_cid(final_name)
+                if cid and cid ~= 0 then
+                    data[idx] = cid
+                    placed = placed + 1
+                end
+            end
+        end
+    else
+        -- Legacy table path
+        for i = 1, #voxels do
+            local v = voxels[i]
+            local vx = v.wx or v.x or 0
+            local vy = v.wy or v.y or 0
+            local vz = v.wz or v.z or 0
+            local wx = offset.x + math.floor(vx)
+            local wy = offset.y + math.floor(vy)
+            local wz = offset.z + math.floor(vz)
+            
+            local idx = area:index(wx, wy, wz)
+            if idx then
+                local block_name
+                if use_color and v.r and v.g and v.b then
+                    block_name = voxel_importer.rgb_to_block(v.r, v.g, v.b)
+                else
+                    block_name = get_safe_node("default:stone")
+                end
+
+                local final_name = get_safe_node(block_name)
+                local cid = get_cid(final_name)
+                if cid and cid ~= 0 then
+                    data[idx] = cid
+                    placed = placed + 1
+                end
             end
         end
     end

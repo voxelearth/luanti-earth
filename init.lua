@@ -157,21 +157,25 @@ minetest.register_chatcommand("visit", {
     description = "Teleport to a real-world location (e.g. /visit Paris)",
     privs = {server = true, teleport = true},
     func = function(name, param)
+        minetest.log("error", "[Visit] Command called by " .. name .. " with param: " .. param)
         if not param or param == "" then
             return false, "Usage: /visit <location>"
         end
 
         local api_key = storage:get_string("google_api_key")
         if not api_key or api_key == "" then
+            minetest.log("error", "[Visit] API Key missing")
             return false, "API Key not set. Use /earth_apikey <key> first."
         end
 
         local player = minetest.get_player_by_name(name)
         if not player then
+            minetest.log("error", "[Visit] Player not found")
             return false, "Player not found"
         end
 
         if not http then
+            minetest.log("error", "[Visit] HTTP API missing")
             return false,
                 "HTTP API unavailable. Add luanti_earth to secure.http_mods and restart the server."
         end
@@ -179,17 +183,25 @@ minetest.register_chatcommand("visit", {
         -- Add mod path to package.cpath to find the DLL
         package.cpath = package.cpath .. ";" .. modpath .. "/?.dll"
         
+        minetest.log("error", "[Visit] Attempting to require earth_native")
         local has_native, earth_native = pcall(require, "earth_native")
         if not has_native then
+            minetest.log("error", "[Visit] Native not found, building...")
             minetest.chat_send_player(name, "Native module not found. Attempting to build...")
             -- Try to build if missing (windows only)
             local build_cmd = '"' .. modpath .. '\\native\\build.bat"'
-            os.execute(build_cmd)
+            if not os_execute then
+                minetest.log("error", "[Visit] os_execute missing")
+                return false, "Cannot build native module: os.execute not available. Add luanti_earth to secure.trusted_mods."
+            end
+            os_execute(build_cmd)
             has_native, earth_native = pcall(require, "earth_native")
             if not has_native then
+                minetest.log("error", "[Visit] Native load failed: " .. tostring(earth_native))
                 return false, "Failed to load native module: " .. tostring(earth_native)
             end
         end
+        minetest.log("error", "[Visit] Native loaded successfully")
 
         minetest.chat_send_player(name, "Geocoding '" .. param .. "'...")
         send_progress(name, 5, "Geocoding location...")
@@ -198,6 +210,7 @@ minetest.register_chatcommand("visit", {
         local url = "https://maps.googleapis.com/maps/api/geocode/json?address=" ..
                     minetest.urlencode(param) .. "&key=" .. api_key
 
+        print("[Lua] Requesting Geocode: " .. url)
         http.fetch({url = url, timeout = 10}, function(res)
             if not res.succeeded then
                 minetest.chat_send_player(name, "Geocoding failed: Request failed")
@@ -223,9 +236,11 @@ minetest.register_chatcommand("visit", {
 
             -- Call native function
             -- args: lat, lon, radius, resolution, api_key
-            local voxels = earth_native.download_and_voxelize(lat, lng, 200, 100, api_key)
+            print("[Lua] Calling earth_native.download_and_voxelize(" .. lat .. ", " .. lng .. ", 200, 100)")
+            local voxel_bytes = earth_native.download_and_voxelize(lat, lng, 200, 100, api_key)
+            print("[Lua] Returned from native call. Bytes: " .. (voxel_bytes and #voxel_bytes or "nil"))
             
-            if not voxels or #voxels == 0 then
+            if not voxel_bytes or #voxel_bytes == 0 then
                 minetest.chat_send_player(name, "No voxels generated.")
                 send_progress(name, 0, "Failed")
                 return
@@ -236,7 +251,9 @@ minetest.register_chatcommand("visit", {
             --------------------------------------------------
             -- 3. Import into the world
             --------------------------------------------------
-            minetest.chat_send_player(name, "Importing " .. #voxels .. " voxels...")
+            -- Estimate count (16 bytes per voxel)
+            local voxel_count = math.floor(#voxel_bytes / 16)
+            minetest.chat_send_player(name, "Importing " .. voxel_count .. " voxels...")
             send_progress(name, 90, "Importing voxels...")
 
             local spawn_pos = {
@@ -246,7 +263,7 @@ minetest.register_chatcommand("visit", {
             }
 
             -- Wrap in expected format
-            local voxel_data = { voxels = voxels }
+            local voxel_data = { voxel_bytes = voxel_bytes }
             
             -- Place voxels
             local count = voxel_importer.place_voxels(voxel_data, spawn_pos, true)
@@ -258,8 +275,6 @@ minetest.register_chatcommand("visit", {
             player:set_pos({x = spawn_pos.x, y = spawn_pos.y + 20, z = spawn_pos.z})
             minetest.chat_send_player(name, "Teleported to " .. param)
         end)
-    end
-})
     end
 })
 

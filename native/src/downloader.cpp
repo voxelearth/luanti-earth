@@ -114,11 +114,15 @@ static void adoptSessionFromUrl(const std::string& url, std::string& session) {
 
 TileDownloader::TileDownloader(const std::string& apiKey) : apiKey(apiKey) {}
 
+#include "debug_log.h"
+
+// ...
+
 std::pair<std::vector<unsigned char>, std::string>
 TileDownloader::fetchUrl(const std::string& url) {
     std::vector<unsigned char> buffer;
     std::string contentType;
-    std::cout << "Fetching URL: " << url << std::endl;
+    log_debug("[Downloader] Fetching URL: " + url);
 
 #ifdef _WIN32
     // Parse URL

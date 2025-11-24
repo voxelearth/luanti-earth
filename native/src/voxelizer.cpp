@@ -20,17 +20,26 @@ Vec3 operator*(const Vec3& a, double s) { return {a.x*s, a.y*s, a.z*s}; }
 
 // --- Voxelizer Implementation ---
 
-VoxelGrid Voxelizer::voxelize(const std::vector<unsigned char>& glbData, int resolution) {
+#include "debug_log.h"
+
+// ...
+
+VoxelGrid Voxelizer::voxelize(const std::vector<unsigned char>& glbData, int resolution, double originX, double originY, double originZ) {
     VoxelGrid grid;
     tinygltf::Model model;
     tinygltf::TinyGLTF loader;
     std::string err, warn;
 
+    log_debug("[Voxelizer] Loading GLB (" + std::to_string(glbData.size()) + " bytes)");
     bool ret = loader.LoadBinaryFromMemory(&model, &err, &warn, glbData.data(), glbData.size());
 
-    if (!warn.empty()) std::cout << "TinyGLTF Warn: " << warn << std::endl;
-    if (!err.empty()) std::cout << "TinyGLTF Err: " << err << std::endl;
-    if (!ret) return grid;
+    if (!warn.empty()) log_debug("[Voxelizer] TinyGLTF Warn: " + warn);
+    if (!err.empty()) log_debug("[Voxelizer] TinyGLTF Err: " + err);
+    if (!ret) {
+        log_debug("[Voxelizer] Failed to load GLB");
+        return grid;
+    }
+    log_debug("[Voxelizer] GLB loaded. Meshes: " + std::to_string(model.meshes.size()));
 
     // 1. Extract mesh data (vertices, indices, UVs, materials)
     // Simplified: Iterate all meshes, apply world transform (if any), collect triangles.
@@ -130,18 +139,8 @@ VoxelGrid Voxelizer::voxelize(const std::vector<unsigned char>& glbData, int res
         }
     }
 
-    // 2. Compute BBox
-    Vec3 min = {1e9, 1e9, 1e9}, max = {-1e9, -1e9, -1e9};
-    for (const auto& t : triangles) {
-        for (const auto& v : {t.v0, t.v1, t.v2}) {
-            if (v.x < min.x) min.x = v.x; if (v.x > max.x) max.x = v.x;
-            if (v.y < min.y) min.y = v.y; if (v.y > max.y) max.y = v.y;
-            if (v.z < min.z) min.z = v.z; if (v.z > max.z) max.z = v.z;
-        }
-    }
-
-    // Compute Center (ECEF)
-    Vec3 center = {(min.x + max.x) * 0.5, (min.y + max.y) * 0.5, (min.z + max.z) * 0.5};
+    // 2. Use Provided Origin (Global Origin)
+    Vec3 center = { originX, originY, originZ };
 
     // Compute Rotation to align Up (center) to Y (0,1,0)
     // Up vector = normalize(center)
@@ -198,7 +197,7 @@ VoxelGrid Voxelizer::voxelize(const std::vector<unsigned char>& glbData, int res
     }
 
     // Recompute BBox after rotation
-    min = {1e9, 1e9, 1e9}; max = {-1e9, -1e9, -1e9};
+    Vec3 min = {1e9, 1e9, 1e9}, max = {-1e9, -1e9, -1e9};
     for (const auto& t : triangles) {
         for (const auto& v : {t.v0, t.v1, t.v2}) {
             if (v.x < min.x) min.x = v.x; if (v.x > max.x) max.x = v.x;

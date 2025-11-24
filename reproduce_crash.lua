@@ -10,45 +10,86 @@ end
 
 print("Module loaded successfully!")
 
--- Parameters from init.lua that cause crash
+-- FFI Setup
+local ffi = require("ffi")
+ffi.cdef[[
+    int start_download_and_voxelize(double lat, double lon, double radius, int resolution, const char* api_key);
+    int get_job_status(int job_id);
+    int get_job_result_size(int job_id);
+    int get_job_result(int job_id, char* buffer, int max_len);
+    void free_job(int job_id);
+]]
+
+-- Load DLL
+local lib_path = "native/build/Release/earth_native.dll"
+local earth_lib = ffi.load(lib_path)
+
+if not earth_lib then
+    print("Failed to load DLL: " .. lib_path)
+    return
+end
+
+-- Parameters
 local lat = 48.8566
 local lon = 2.3522
 local radius = 200
 local resolution = 100
+local api_key = "test_key" -- Dummy key, downloader handles it
 
-print("Testing download_and_voxelize with HIGH load...")
-local voxel_bytes = earth_native.download_and_voxelize(lat, lon, radius, resolution, api_key)
-local end_time = os.clock()
+print("Starting async job...")
+local job_id = earth_lib.start_download_and_voxelize(lat, lon, radius, resolution, api_key)
+print("Job ID: " .. job_id)
 
-if not voxel_bytes or #voxel_bytes == 0 then
-    print("No voxels returned.")
-    os.exit(1)
-end
+-- Poll loop
+while true do
+    local status = earth_lib.get_job_status(job_id)
+    if status == 0 then
+        -- Running
+        -- print("Job running...")
+        -- In a real game, we would yield here. In this script, we sleep or busy wait.
+        -- Lua 5.1 doesn't have sleep, so we just busy wait a bit or rely on OS scheduling.
+    elseif status == 1 then
+        print("Job done!")
+        local size = earth_lib.get_job_result_size(job_id)
+        print("Result size: " .. size)
+        
+        if size > 0 then
+            local buf = ffi.new("char[?]", size)
+            local copied = earth_lib.get_job_result(job_id, buf, size)
+            print("Copied bytes: " .. copied)
+            
+            -- Verify some data
+            local voxel_bytes = ffi.string(buf, copied)
+            print("Received " .. #voxel_bytes .. " bytes.")
+            
+            -- Basic parsing check
+            local function read_int32_le(str, offset)
+                local b1, b2, b3, b4 = string.byte(str, offset, offset + 3)
+                local n = b1 + b2 * 256 + b3 * 65536 + b4 * 16777216
+                if n > 2147483647 then n = n - 4294967296 end
+                return n
+            end
 
-local voxel_count = math.floor(#voxel_bytes / 16)
-print("Received " .. #voxel_bytes .. " bytes (" .. voxel_count .. " voxels).")
-
-if voxel_count > 0 then
-    -- Helper to read int32 little endian
-    local function read_int32_le(str, offset)
-        local b1 = string.byte(str, offset)
-        local b2 = string.byte(str, offset + 1)
-        local b3 = string.byte(str, offset + 2)
-        local b4 = string.byte(str, offset + 3)
-        local n = b1 + b2*256 + b3*65536 + b4*16777216
-        if n > 2147483647 then n = n - 4294967296 end
-        return n
+            if #voxel_bytes >= 16 then
+                local x = read_int32_le(voxel_bytes, 1)
+                local y = read_int32_le(voxel_bytes, 5)
+                local z = read_int32_le(voxel_bytes, 9)
+                local r = string.byte(voxel_bytes, 13)
+                local g = string.byte(voxel_bytes, 14)
+                local b = string.byte(voxel_bytes, 15)
+                print("Sample voxel: x=" .. x .. " y=" .. y .. " z=" .. z .. " r=" .. r .. " g=" .. g .. " b=" .. b)
+            end
+        else
+            print("Job finished but returned no data.")
+        end
+        
+        earth_lib.free_job(job_id)
+        break
+    else
+        print("Job failed with status: " .. status)
+        earth_lib.free_job(job_id)
+        break
     end
-
-    local x = read_int32_le(voxel_bytes, 1)
-    local y = read_int32_le(voxel_bytes, 5)
-    local z = read_int32_le(voxel_bytes, 9)
-    local r = string.byte(voxel_bytes, 13)
-    local g = string.byte(voxel_bytes, 14)
-    local b = string.byte(voxel_bytes, 15)
-    
-    print(string.format(
-        "Sample voxel: x=%d y=%d z=%d r=%d g=%d b=%d",
-        x, y, z, r, g, b
-    ))
 end
+
+print("Done.")

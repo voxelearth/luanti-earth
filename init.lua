@@ -180,28 +180,25 @@ minetest.register_chatcommand("visit", {
                 "HTTP API unavailable. Add luanti_earth to secure.http_mods and restart the server."
         end
 
-        -- Add mod path to package.cpath to find the DLL
-        package.cpath = package.cpath .. ";" .. modpath .. "/?.dll"
-        
-        minetest.log("error", "[Visit] Attempting to require earth_native")
-        local has_native, earth_native = pcall(require, "earth_native")
-        if not has_native then
-            minetest.log("error", "[Visit] Native not found, building...")
-            minetest.chat_send_player(name, "Native module not found. Attempting to build...")
-            -- Try to build if missing (windows only)
-            local build_cmd = '"' .. modpath .. '\\native\\build.bat"'
-            if not os_execute then
-                minetest.log("error", "[Visit] os_execute missing")
-                return false, "Cannot build native module: os.execute not available. Add luanti_earth to secure.trusted_mods."
-            end
-            os_execute(build_cmd)
-            has_native, earth_native = pcall(require, "earth_native")
-            if not has_native then
-                minetest.log("error", "[Visit] Native load failed: " .. tostring(earth_native))
-                return false, "Failed to load native module: " .. tostring(earth_native)
-            end
+        -- FFI Setup
+        local ffi = require("ffi")
+        ffi.cdef[[
+            int start_download_and_voxelize(double lat, double lon, double radius, int resolution, const char* api_key);
+            int get_job_status(int job_id);
+            int get_job_result_size(int job_id);
+            int get_job_result(int job_id, char* buffer, int max_len);
+            void free_job(int job_id);
+        ]]
+
+        -- Load DLL
+        -- Try multiple paths for robustness
+        local lib_path = modpath .. "/earth_native.dll"
+        local earth_lib = ffi.load(lib_path)
+
+        if not earth_lib then
+             minetest.log("error", "[Visit] Failed to load DLL via FFI: " .. lib_path)
+             return false, "Failed to load native DLL."
         end
-        minetest.log("error", "[Visit] Native loaded successfully")
 
         minetest.chat_send_player(name, "Geocoding '" .. param .. "'...")
         send_progress(name, 5, "Geocoding location...")
@@ -229,51 +226,68 @@ minetest.register_chatcommand("visit", {
             send_progress(name, 10, "Location resolved")
 
             --------------------------------------------------
-            -- 2. Download & Voxelize (Native C++)
+            -- 2. Start Async Job
             --------------------------------------------------
-            minetest.chat_send_player(name, "Downloading and Voxelizing (Native C++)...")
-            send_progress(name, 30, "Processing tiles...")
+            minetest.chat_send_player(name, "Starting download (Async)...")
+            send_progress(name, 20, "Starting job...")
 
-            -- Call native function
-            -- args: lat, lon, radius, resolution, api_key
-            print("[Lua] Calling earth_native.download_and_voxelize(" .. lat .. ", " .. lng .. ", 200, 100)")
-            local voxel_bytes = earth_native.download_and_voxelize(lat, lng, 200, 100, api_key)
-            print("[Lua] Returned from native call. Bytes: " .. (voxel_bytes and #voxel_bytes or "nil"))
-            
-            if not voxel_bytes or #voxel_bytes == 0 then
-                minetest.chat_send_player(name, "No voxels generated.")
-                send_progress(name, 0, "Failed")
-                return
+            local job_id = earth_lib.start_download_and_voxelize(lat, lng, 200, 100, api_key)
+            print("[Lua] Job started. ID: " .. job_id)
+
+            -- Polling loop
+            local function poll_job()
+                local status = earth_lib.get_job_status(job_id)
+                
+                if status == 0 then
+                    -- Running
+                    send_progress(name, 50, "Processing... (Async)")
+                    minetest.after(0.5, poll_job)
+                elseif status == 1 then
+                    -- Done
+                    send_progress(name, 80, "Job complete. Retrieving data...")
+                    
+                    local size = earth_lib.get_job_result_size(job_id)
+                    print("[Lua] Result size: " .. size)
+                    
+                    if size > 0 then
+                        local buf = ffi.new("char[?]", size)
+                        local copied = earth_lib.get_job_result(job_id, buf, size)
+                        local voxel_bytes = ffi.string(buf, copied)
+                        
+                        earth_lib.free_job(job_id)
+                        
+                        -- Import
+                        local voxel_count = math.floor(#voxel_bytes / 16)
+                        minetest.chat_send_player(name, "Importing " .. voxel_count .. " voxels...")
+                        send_progress(name, 90, "Importing voxels...")
+
+                        local spawn_pos = {
+                            x = math.random(-RANDOM_SPAWN_RANGE, RANDOM_SPAWN_RANGE),
+                            y = 50,
+                            z = math.random(-RANDOM_SPAWN_RANGE, RANDOM_SPAWN_RANGE),
+                        }
+
+                        local voxel_data = { voxel_bytes = voxel_bytes }
+                        local count = voxel_importer.place_voxels(voxel_data, spawn_pos, true)
+
+                        minetest.chat_send_player(name, "Imported " .. count .. " blocks at (" ..
+                            spawn_pos.x .. ", " .. spawn_pos.y .. ", " .. spawn_pos.z .. ").")
+                        send_progress(name, 100, "Done")
+
+                        player:set_pos({x = spawn_pos.x, y = spawn_pos.y + 20, z = spawn_pos.z})
+                        minetest.chat_send_player(name, "Teleported to " .. param)
+                    else
+                        minetest.chat_send_player(name, "Job finished but returned no data.")
+                        earth_lib.free_job(job_id)
+                    end
+                else
+                    -- Error
+                    minetest.chat_send_player(name, "Job failed with status: " .. status)
+                    earth_lib.free_job(job_id)
+                end
             end
 
-            send_progress(name, 80, "Processing complete")
-
-            --------------------------------------------------
-            -- 3. Import into the world
-            --------------------------------------------------
-            -- Estimate count (16 bytes per voxel)
-            local voxel_count = math.floor(#voxel_bytes / 16)
-            minetest.chat_send_player(name, "Importing " .. voxel_count .. " voxels...")
-            send_progress(name, 90, "Importing voxels...")
-
-            local spawn_pos = {
-                x = math.random(-RANDOM_SPAWN_RANGE, RANDOM_SPAWN_RANGE),
-                y = 50,
-                z = math.random(-RANDOM_SPAWN_RANGE, RANDOM_SPAWN_RANGE),
-            }
-
-            -- Wrap in expected format
-            local voxel_data = { voxel_bytes = voxel_bytes }
-            
-            -- Place voxels
-            local count = voxel_importer.place_voxels(voxel_data, spawn_pos, true)
-
-            minetest.chat_send_player(name, "Imported " .. count .. " blocks at (" ..
-                spawn_pos.x .. ", " .. spawn_pos.y .. ", " .. spawn_pos.z .. ").")
-            send_progress(name, 100, "Done")
-
-            player:set_pos({x = spawn_pos.x, y = spawn_pos.y + 20, z = spawn_pos.z})
-            minetest.chat_send_player(name, "Teleported to " .. param)
+            minetest.after(0.5, poll_job)
         end)
     end
 })

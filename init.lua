@@ -176,6 +176,21 @@ minetest.register_chatcommand("visit", {
                 "HTTP API unavailable. Add luanti_earth to secure.http_mods and restart the server."
         end
 
+        -- Add mod path to package.cpath to find the DLL
+        package.cpath = package.cpath .. ";" .. modpath .. "/?.dll"
+        
+        local has_native, earth_native = pcall(require, "earth_native")
+        if not has_native then
+            minetest.chat_send_player(name, "Native module not found. Attempting to build...")
+            -- Try to build if missing (windows only)
+            local build_cmd = '"' .. modpath .. '\\native\\build.bat"'
+            os.execute(build_cmd)
+            has_native, earth_native = pcall(require, "earth_native")
+            if not has_native then
+                return false, "Failed to load native module: " .. tostring(earth_native)
+            end
+        end
+
         minetest.chat_send_player(name, "Geocoding '" .. param .. "'...")
         send_progress(name, 5, "Geocoding location...")
 
@@ -186,14 +201,12 @@ minetest.register_chatcommand("visit", {
         http.fetch({url = url, timeout = 10}, function(res)
             if not res.succeeded then
                 minetest.chat_send_player(name, "Geocoding failed: Request failed")
-                send_progress(name, 0, "Geocoding failed")
                 return
             end
 
             local data = minetest.parse_json(res.data)
             if not data or not data.results or #data.results == 0 then
                 minetest.chat_send_player(name, "Geocoding failed: Location not found")
-                send_progress(name, 0, "Location not found")
                 return
             end
 
@@ -203,95 +216,50 @@ minetest.register_chatcommand("visit", {
             send_progress(name, 10, "Location resolved")
 
             --------------------------------------------------
-            -- 2. Prepare directories (in world folder)
+            -- 2. Download & Voxelize (Native C++)
             --------------------------------------------------
-            local location_name = get_safe_filename(param)
-            local cache_dir = cache_root .. "/" .. location_name
-            local glb_dir   = cache_dir .. "/glb"
-            local json_dir  = cache_dir .. "/json"
+            minetest.chat_send_player(name, "Downloading and Voxelizing (Native C++)...")
+            send_progress(name, 30, "Processing tiles...")
 
-            -- Use Luanti's mkdir (recursive) – safe in world dir
-            minetest.mkdir(cache_dir)
-            minetest.mkdir(glb_dir)
-            minetest.mkdir(json_dir)
-
-            --------------------------------------------------
-            -- Ensure we have permission to run external commands
-            --------------------------------------------------
-            if not os_execute then
-                minetest.chat_send_player(name,
-                    "Server not configured to allow external commands.\n" ..
-                    "Add luanti_earth to secure.trusted_mods and restart.")
-                send_progress(name, 0, "Missing insecure environment")
+            -- Call native function
+            -- args: lat, lon, radius, resolution, api_key
+            local voxels = earth_native.download_and_voxelize(lat, lng, 200, 100, api_key)
+            
+            if not voxels or #voxels == 0 then
+                minetest.chat_send_player(name, "No voxels generated.")
+                send_progress(name, 0, "Failed")
                 return
             end
 
-            --------------------------------------------------
-            -- 3. Download Tiles (Node.js)
-            --------------------------------------------------
-            minetest.chat_send_player(name, "Downloading 3D Tiles... (this can take a bit)")
-            send_progress(name, 25, "Downloading 3D Tiles...")
-
-            local node_cmd_dl = string.format(
-                'node "%s/tile_downloader.js" --key "%s" --lat %f --lng %f --radius 200 --out "%s"',
-                modpath, api_key, lat, lng, glb_dir
-            )
-
-            local ret_dl = os_execute(node_cmd_dl)
-            if ret_dl ~= 0 and ret_dl ~= true then
-                minetest.chat_send_player(name,
-                    "Download failed. Make sure you ran 'npm install' in the Voxel Earth mod folder.")
-                send_progress(name, 0, "Download failed")
-                return
-            end
-
-            send_progress(name, 50, "Download complete")
+            send_progress(name, 80, "Processing complete")
 
             --------------------------------------------------
-            -- 4. Voxelize (Node.js)
+            -- 3. Import into the world
             --------------------------------------------------
-            minetest.chat_send_player(name, "Voxelizing tiles...")
-            send_progress(name, 60, "Voxelizing tiles...")
-
-            local node_cmd_vox = string.format(
-                'node "%s/voxelize_tiles.js" "%s" "%s" 100',
-                modpath, glb_dir, json_dir
-            )
-
-            local ret_vox = os_execute(node_cmd_vox)
-            if ret_vox ~= 0 and ret_vox ~= true then
-                minetest.chat_send_player(name,
-                    "Voxelization failed.")
-                send_progress(name, 0, "Voxelization failed")
-                return
-            end
-
-            send_progress(name, 80, "Voxelization complete")
-
-            --------------------------------------------------
-            -- 5. Import into the world
-            --------------------------------------------------
-            minetest.chat_send_player(name, "Importing voxels into the world...")
+            minetest.chat_send_player(name, "Importing " .. #voxels .. " voxels...")
             send_progress(name, 90, "Importing voxels...")
 
-            -- Pick a random location **far away** to avoid overlapping visits
             local spawn_pos = {
                 x = math.random(-RANDOM_SPAWN_RANGE, RANDOM_SPAWN_RANGE),
                 y = 50,
                 z = math.random(-RANDOM_SPAWN_RANGE, RANDOM_SPAWN_RANGE),
             }
 
-            -- Import from JSON dir; true = use_color / pure mode auto-detect
-            local count = voxel_importer.import_from_directory(json_dir, spawn_pos, true)
+            -- Wrap in expected format
+            local voxel_data = { voxels = voxels }
+            
+            -- Place voxels
+            local count = voxel_importer.place_voxels(voxel_data, spawn_pos, true)
 
             minetest.chat_send_player(name, "Imported " .. count .. " blocks at (" ..
                 spawn_pos.x .. ", " .. spawn_pos.y .. ", " .. spawn_pos.z .. ").")
             send_progress(name, 100, "Done")
 
-            -- Teleport player slightly above the structure
             player:set_pos({x = spawn_pos.x, y = spawn_pos.y + 20, z = spawn_pos.z})
             minetest.chat_send_player(name, "Teleported to " .. param)
         end)
+    end
+})
     end
 })
 

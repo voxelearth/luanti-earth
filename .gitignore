@@ -136,3 +136,5 @@ dist
 .pnp.*
 *.glb
 /debug
+*.txt
+/native/build
